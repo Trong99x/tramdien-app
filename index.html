@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Trạm điện &amp; bơm</title>
+<style>
+:root{--bg:#f1f5f9;--card:#fff;--tx:#0f172a;--mu:#64748b;--ok:#16a34a;--bad:#dc2626;--warn:#d97706;--ln:#e2e8f0;--ac:#2563eb}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1220;--card:#162033;--tx:#e5e7eb;--mu:#94a3b8;--ln:#26324a;--ac:#60a5fa}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;position:sticky;top:0;background:var(--bg);z-index:5}
+h1{font-size:17px;margin:0}
+.sub{color:var(--mu);font-size:12px}
+main{padding:0 12px 24px;max-width:720px;margin:auto}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px;margin-bottom:10px}
+.card h2{font-size:15px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}
+.row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--ln)}
+.row:last-child{border:0}.row span:first-child{color:var(--mu)}
+.b{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;color:#fff}
+.ok{background:var(--ok)}.bad{background:var(--bad)}.warn{background:var(--warn)}.off{background:var(--mu)}
+.alerts{margin:6px 0 0;display:flex;gap:6px;flex-wrap:wrap}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--ac);color:#fff;font-weight:600}
+button.g{background:transparent;color:var(--tx);border:1px solid var(--ln)}
+button.r{background:var(--bad)}button.s{background:var(--ok)}
+button:disabled{opacity:.4}
+.btns{display:flex;gap:8px;margin-top:8px}.btns button{flex:1}
+#banner{display:none;padding:8px 12px;margin:0 12px 10px;border-radius:10px;background:var(--warn);color:#fff;font-size:13px}
+dialog{border:1px solid var(--ln);border-radius:14px;background:var(--card);color:var(--tx);max-width:92vw;width:380px}
+dialog::backdrop{background:#0008}
+label{display:block;margin:8px 0 2px;font-size:12px;color:var(--mu)}
+input[type=text],input[type=password]{width:100%;padding:9px;border-radius:8px;border:1px solid var(--ln);background:var(--bg);color:var(--tx);font:inherit}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#000c;color:#fff;padding:10px 16px;border-radius:99px;display:none;z-index:9;max-width:90vw;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>⚡ Trạm điện &amp; bơm</h1><div class="sub" id="conn">Chưa kết nối</div></div>
+  <button class="g" id="setBtn">⚙️</button>
+</header>
+<div id="banner"></div>
+<main id="main"><div class="card sub">Đang chờ dữ liệu… Bấm ⚙️ để nhập thông tin broker nếu là lần đầu.</div></main>
+
+<dialog id="confirm"><form method="dialog">
+  <h3 id="cTitle" style="margin-top:0"></h3><p id="cMsg"></p>
+  <div class="btns"><button class="g" value="no">Hủy</button><button id="cOk" value="yes" class="r">Xác nhận</button></div>
+</form></dialog>
+
+<dialog id="settings"><form method="dialog">
+  <h3 style="margin-top:0">Cài đặt</h3>
+  <label>Broker (WebSocket TLS)</label><input type="text" id="sUrl" placeholder="wss://xxxx.s1.eu.hivemq.cloud:8884/mqtt">
+  <label>Tài khoản</label><input type="text" id="sUser" autocomplete="off">
+  <label>Mật khẩu</label><input type="password" id="sPass" autocomplete="off">
+  <label>Topic gốc</label><input type="text" id="sBase">
+  <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" id="sCtl"> Cho phép điều khiển (đóng/cắt atomat)</label>
+  <div class="sub" style="margin-top:4px">Điều khiển chỉ hoạt động khi dùng broker riêng có tài khoản; broker công cộng bị khóa nút.</div>
+  <div class="btns"><button class="g" value="no">Đóng</button><button id="sSave" value="yes">Lưu &amp; kết nối</button></div>
+</form></dialog>
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const LS={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:v}catch(e){return d}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+const cfg={url:LS.get('url','wss://broker.hivemq.com:8884/mqtt'),user:LS.get('user',''),pass:LS.get('pass',''),base:LS.get('base','trinhvantrong/tramdien/290893'),ctl:LS.get('ctl','0')==='1'};
+let client=null,st=null,master=null,online=null,lastRx=0,connected=false,pending=null;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const f=(v,d=1)=>(typeof v==='number'&&isFinite(v))?v.toFixed(d):'—';
+const hm=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/3600)+'h'+String(Math.floor(s%3600/60)).padStart(2,'0')};
+const isPublic=()=>/broker\.hivemq\.com|broker\.emqx\.io|test\.mosquitto\.org|mqtt\.eclipseprojects\.io/i.test(cfg.url);
+function toast(t,ms=4000){const e=$('#toast');e.textContent=t;e.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display='none',ms)}
+function setConn(t){$('#conn').textContent=t}
+
+function connect(){
+  if(client){try{client.end(true)}catch(e){}}
+  st=null;master=null;online=null;connected=false;render();
+  if(typeof mqtt==='undefined'){setConn('Chưa tải được thư viện MQTT (cần mạng lần đầu)');return}
+  setConn('Đang kết nối…');
+  const b=cfg.base;
+  client=mqtt.connect(cfg.url,{username:cfg.user||undefined,password:cfg.pass||undefined,clientId:'pwa_'+Math.random().toString(16).slice(2,10),reconnectPeriod:3000,connectTimeout:10000,clean:true});
+  client.on('connect',()=>{connected=true;setConn('Đã kết nối broker');client.subscribe([b+'/state',b+'/status',b+'/master',b+'/ack'],{qos:0});render()});
+  client.on('reconnect',()=>setConn('Đang kết nối lại…'));
+  client.on('close',()=>{connected=false;setConn('Mất kết nối broker');render()});
+  client.on('error',e=>setConn('Lỗi: '+(e&&e.message||e)));
+  client.on('message',(t,p)=>{
+    const k=t.slice(b.length+1),s=p.toString();
+    try{
+      if(k==='status'){online=(s==='online')}
+      else if(k==='state'){st=JSON.parse(s);lastRx=Date.now()}
+      else if(k==='master'){master=JSON.parse(s)}
+      else if(k==='ack'){const a=JSON.parse(s);if(pending&&a.seq===pending){pending=null;toast((a.ok?'✅ ':'❌ ')+(a.msg||''),6000)}}
+    }catch(e){}
+    render();
+  });
+}
+
+function badge(c,t){return `<span class="b ${c}">${esc(t)}</span>`}
+function row(a,b){return `<div class="row"><span>${a}</span><span>${b}</span></div>`}
+function meter(name,m){
+  if(!m)return '';
+  const run=m.on?(m.rr?badge('ok','▶ đang chạy '+hm(m.rc)):badge('off','■ dừng')):badge('bad','mất công tơ');
+  let al='';
+  if(m.pl)al+=badge('bad','mất pha');
+  if(m.uv)al+=badge('warn','áp lệch');
+  if(m.ic)al+=badge('bad','quá dòng');
+  return `<div class="card"><h2>${name}${run}</h2>
+  ${row('Áp 3 pha',[m.Ua,m.Ub,m.Uc].map(v=>f(v,0)).join(' · ')+' V')}
+  ${row('Dòng 3 pha',[m.Ia,m.Ib,m.Ic].map(v=>f(v,1)).join(' · ')+' A')}
+  ${row('Công suất',f(m.P,2)+' kW · PF '+f(m.PF,2))}
+  ${row('Tần số',f(m.F,2)+' Hz')}
+  ${row('Hôm nay',f(m.d,1)+' kWh · chạy '+hm(m.rt))}
+  ${row('Hôm qua',f(m.y,1)+' kWh')}
+  ${row('Tháng này',f(m.m,0)+' kWh')}
+  ${row('Chỉ số tổng',f(m.E,1)+' kWh')}
+  ${al?`<div class="alerts">${al}</div>`:''}</div>`;
+}
+function station(){
+  const cb=st.cb,cbT=cb===1?badge('ok','ĐÓNG'):cb===0?badge('bad','CẮT'):badge('off','chưa rõ');
+  const stale=(Date.now()-lastRx)>45000;
+  let h=`<div class="card"><h2>Trạm điện ${online===false?badge('bad','offline'):stale?badge('warn','mất dữ liệu'):badge('ok','online')}</h2>
+  ${row('Giờ trạm',esc(st.t))}${row('Phiên bản',esc(st.fw))}${row('WiFi',f(st.rssi,0)+' dBm')}
+  ${row('Mưa',st.rain?badge('warn','đang mưa'):'không')}
+  ${row('Báo động vật lý',st.alarm?badge('bad','ĐANG BÁO'):'bình thường')}
+  ${row('Atomat',cbT)}
+  ${(typeof st.ct==='number'&&st.ct>0&&st.ct<200)?row('Nhiệt độ N',st.ct+' °C'):''}
+  ${row('Dòng rò',f(st.cl,1)+' mA')}`;
+  if(st.cbe===1){
+    const can=cfg.ctl&&!isPublic()&&connected&&!stale;
+    h+=`<div class="btns"><button class="s" ${can?'':'disabled'} onclick="ask(1)">Đóng atomat</button><button class="r" ${can?'':'disabled'} onclick="ask(0)">Cắt atomat</button></div>`;
+    if(!can)h+=`<div class="sub" style="margin-top:6px">${isPublic()?'Điều khiển bị khóa: đang dùng broker công cộng.':!cfg.ctl?'Điều khiển đang tắt (bật trong ⚙️).':'Chờ kết nối và dữ liệu mới.'}</div>`;
+  }
+  return h+'</div>';
+}
+function masterCard(){
+  if(!master)return '';
+  const rows=Object.keys(master).map(k=>{const v=master[k];return row(esc(k),esc(typeof v==='object'?JSON.stringify(v):v))}).join('');
+  return `<div class="card"><h2>Trạm bơm</h2>${rows}</div>`;
+}
+function render(){
+  const bn=$('#banner');
+  if(isPublic()){bn.style.display='block';bn.textContent='⚠️ Đang dùng broker công cộng: dữ liệu ai cũng xem được. Nên chuyển sang broker riêng.'}else bn.style.display='none';
+  $('#main').innerHTML=st?station()+meter('Moong 1',st.m1)+meter('Moong 2',st.m2)+masterCard():'<div class="card sub">Đang chờ dữ liệu từ trạm… Bấm ⚙️ để kiểm tra cài đặt.</div>'+masterCard();
+}
+
+function ask(on){
+  $('#cTitle').textContent=(on?'ĐÓNG':'CẮT')+' atomat?';
+  $('#cMsg').textContent=on?'Atomat sẽ đóng, điện cấp lại cho các Moong.':'Atomat sẽ cắt, các Moong mất điện.';
+  const d=$('#confirm');d.returnValue='';d.onclose=()=>{if(d.returnValue==='yes')send(on)};d.showModal();
+}
+function send(on){
+  if(!client||!connected||!cfg.ctl||isPublic())return;
+  const now=Math.floor(Date.now()/1000);
+  pending=now;
+  client.publish(cfg.base+'/cmd',JSON.stringify({c:'cb',on:on,seq:now,ts:now}),{qos:0,retain:false});
+  toast('Đã gửi lệnh '+(on?'ĐÓNG':'CẮT')+', chờ trạm phản hồi…',8000);
+  setTimeout(()=>{if(pending===now){pending=null;toast('⚠️ Trạm chưa phản hồi lệnh')}},15000);
+}
+
+$('#setBtn').onclick=()=>{$('#sUrl').value=cfg.url;$('#sUser').value=cfg.user;$('#sPass').value=cfg.pass;$('#sBase').value=cfg.base;$('#sCtl').checked=cfg.ctl;$('#settings').showModal()};
+$('#settings').onclose=function(){
+  if(this.returnValue!=='yes')return;
+  cfg.url=$('#sUrl').value.trim();cfg.user=$('#sUser').value.trim();cfg.pass=$('#sPass').value;cfg.base=$('#sBase').value.trim().replace(/\/+$/,'');cfg.ctl=$('#sCtl').checked;
+  LS.set('url',cfg.url);LS.set('user',cfg.user);LS.set('pass',cfg.pass);LS.set('base',cfg.base);LS.set('ctl',cfg.ctl?'1':'0');
+  connect();
+};
+setInterval(()=>{if(st)render()},15000);
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+connect();
+</script>
+</body>
+</html>
