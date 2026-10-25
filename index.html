@@ -34,6 +34,25 @@ dialog{border:1px solid var(--ln);border-radius:14px;background:var(--card);colo
 dialog::backdrop{background:#0008}
 label{display:block;margin:8px 0 2px;font-size:12px;color:var(--mu)}
 input[type=text],input[type=password]{width:100%;padding:9px;border-radius:8px;border:1px solid var(--ln);background:var(--bg);color:var(--tx);font:inherit}
+nav{display:flex;gap:8px;padding:0 12px 10px;max-width:720px;margin:auto}
+nav button{flex:1;background:var(--card);color:var(--mu);border:1px solid var(--ln)}
+nav button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.chip{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;color:var(--c);background:color-mix(in srgb,var(--c) 16%,transparent)}
+.cOk{--c:var(--ok)}.cBad{--c:var(--bad)}.cWarn{--c:var(--warn)}.cVolt{--c:var(--ac)}.cDim{--c:var(--mu)}
+.pump{display:flex;gap:10px;align-items:flex-start}
+.tank{width:116px;flex:none;text-align:center;margin:0}
+.tank .pct{font-size:22px;font-weight:700}
+.bar{position:relative;width:46px;height:128px;margin:6px auto;border-radius:8px;background:var(--ln);overflow:hidden}
+.fill{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(#7dd3fc,#0ea5e9);transition:height .7s}
+.mk{position:absolute;left:0;right:0;height:0;border-top:2px dashed var(--c)}
+.pcol{flex:1;min-width:0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.pc .top{display:flex;align-items:center;gap:8px}
+.pc .top b{flex:1;font-size:16px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--c)}
+.pc .info{color:var(--mu);font-size:13px;margin-top:4px}
+.stale{opacity:.45}
+.msg{text-align:center;font-weight:700;color:var(--warn);padding:10px}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#000c;color:#fff;padding:10px 16px;border-radius:99px;display:none;z-index:9;max-width:90vw;text-align:center}
 </style>
 </head>
@@ -43,6 +62,7 @@ input[type=text],input[type=password]{width:100%;padding:9px;border-radius:8px;b
   <button class="g" id="setBtn">⚙️</button>
 </header>
 <div id="banner"></div>
+<nav><button id="tDien">⚡ Trạm điện</button><button id="tBom">💧 Trạm bơm</button></nav>
 <main id="main"><div class="card sub">Đang chờ dữ liệu… Bấm ⚙️ để nhập thông tin broker nếu là lần đầu.</div></main>
 
 <dialog id="confirm"><form method="dialog">
@@ -67,7 +87,8 @@ input[type=text],input[type=password]{width:100%;padding:9px;border-radius:8px;b
 const $=s=>document.querySelector(s);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:v}catch(e){return d}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 const cfg={url:LS.get('url','wss://broker.hivemq.com:8884/mqtt'),user:LS.get('user',''),pass:LS.get('pass',''),base:LS.get('base','trinhvantrong/tramdien/290893'),ctl:LS.get('ctl','0')==='1'};
-let client=null,st=null,master=null,online=null,lastRx=0,connected=false,pending=null;
+let client=null,st=null,master=null,online=null,lastRx=0,mRx=0,connected=false,pending=null,tab=LS.get('tab','dien');
+const trend={t:[],v:[],key:''};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const f=(v,d=1)=>(typeof v==='number'&&isFinite(v))?v.toFixed(d):'—';
 const hm=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/3600)+'h'+String(Math.floor(s%3600/60)).padStart(2,'0')};
@@ -77,12 +98,12 @@ function setConn(t){$('#conn').textContent=t}
 
 function connect(){
   if(client){try{client.end(true)}catch(e){}}
-  st=null;master=null;online=null;connected=false;render();
+  st=null;master=null;online=null;mRx=0;connected=false;render();
   if(typeof mqtt==='undefined'){setConn('Chưa tải được thư viện MQTT (cần mạng lần đầu)');return}
   setConn('Đang kết nối…');
   const b=cfg.base;
   client=mqtt.connect(cfg.url,{username:cfg.user||undefined,password:cfg.pass||undefined,clientId:'pwa_'+Math.random().toString(16).slice(2,10),reconnectPeriod:3000,connectTimeout:10000,clean:true});
-  client.on('connect',()=>{connected=true;setConn('Đã kết nối broker');client.subscribe([b+'/state',b+'/status',b+'/master',b+'/ack'],{qos:0});render()});
+  client.on('connect',()=>{connected=true;setConn('Đã kết nối broker');client.subscribe([b+'/state',b+'/status',b+'/master',b+'/ack'],{qos:0});client.subscribe(b+'/master_status',{qos:1});render()});
   client.on('reconnect',()=>setConn('Đang kết nối lại…'));
   client.on('close',()=>{connected=false;setConn('Mất kết nối broker');render()});
   client.on('error',e=>setConn('Lỗi: '+(e&&e.message||e)));
@@ -91,7 +112,8 @@ function connect(){
     try{
       if(k==='status'){online=(s==='online')}
       else if(k==='state'){st=JSON.parse(s);lastRx=Date.now()}
-      else if(k==='master'){master=JSON.parse(s)}
+      else if(k==='master'){const o=JSON.parse(s);if(o&&o.p1!==undefined){master=o;mRx=Date.now();trendAdd(o)}}
+      else if(k==='master_status'){if(master){master.online=(s==='online');if(s!=='online')mRx=Date.now()-200000}}
       else if(k==='ack'){const a=JSON.parse(s);if(pending&&a.seq===pending){pending=null;toast((a.ok?'✅ ':'❌ ')+(a.msg||''),6000)}}
     }catch(e){}
     render();
@@ -135,15 +157,65 @@ function station(){
   }
   return h+'</div>';
 }
-function masterCard(){
-  if(!master)return '';
-  const rows=Object.keys(master).map(k=>{const v=master[k];return row(esc(k),esc(typeof v==='object'?JSON.stringify(v):v))}).join('');
-  return `<div class="card"><h2>Trạm bơm</h2>${rows}</div>`;
+function trendAdd(m){
+  const key=''+(m.p1?1:0)+(m.p2?1:0)+(m.ph?1:0);
+  if(key!==trend.key){trend.t=[];trend.v=[];trend.key=key}
+  if(!(m.wen&&m.wok&&m.w>=0))return;
+  const t=Date.now()/1000,n=trend.t.length;
+  if(n&&t-trend.t[n-1]<30)return;
+  if(n===40){trend.t.shift();trend.v.shift()}
+  trend.t.push(t);trend.v.push(Math.min(100,m.w));
+}
+// Hồi quy tuyến tính 20 phút gần nhất (giống màn hình): trả phút tới khi chạm ngưỡng cạn/đầy, -1 = chưa rõ
+function eta(m){
+  const n=trend.t.length;if(n<4)return null;
+  const tl=trend.t[n-1],t0=tl-1200;let k=0,sx=0,sy=0,sxx=0,sxy=0,first=null;
+  for(let i=0;i<n;i++){if(trend.t[i]<t0)continue;const x=(trend.t[i]-tl)/60,y=trend.v[i];if(first===null)first=x;sx+=x;sy+=y;sxx+=x*x;sxy+=x*y;k++}
+  if(k<4||-first<3)return null;
+  const den=k*sxx-sx*sx;if(Math.abs(den)<1e-9)return null;
+  const sl=(k*sxy-sx*sy)/den;if(Math.abs(sl)<0.02)return null;
+  const target=sl<0?m.lo:m.hi,d=target-m.w;if(d*sl<0)return null;
+  const mins=Math.round(d/sl);if(mins>1440)return null;
+  return {mins:mins,down:sl<0};
+}
+const fl=v=>v===1?'ĐẦY':v===0?'CẠN':'?';
+const chip=(c,t)=>`<span class="chip c${c}">${esc(t)}</span>`;
+function pumpPage(){
+  const m=master,stale=!m||(Date.now()-mRx)>35000;
+  if(!m)return '<div class="card msg">CHỜ DỮ LIỆU MASTER…</div>';
+  const wOk=m.wen&&m.wok&&m.w>=0,w=Math.max(0,Math.min(100,m.w)),lo=Math.max(0,Math.min(100,m.lo)),hi=Math.max(0,Math.min(100,m.hi));
+  let pct,col='var(--tx)',sub='';
+  if(!m.wen){pct='TẮT';col='var(--mu)';sub='cảm biến tắt'}
+  else if(!wOk){pct='LỖI';col='var(--bad)';sub='không đọc được'}
+  else{pct=w+'%';if(m.w<m.lo)col='var(--bad)';else if(m.w>=m.hi)col='var(--warn)';
+    if(m.wd>=0)sub='cách '+m.wd+' cm';
+    const e=!stale&&eta(m);
+    if(e)sub+=(sub?'<br>':'')+(e.down?'cạn':'đầy')+' sau ~'+(e.mins>=60?Math.floor(e.mins/60)+'h'+String(e.mins%60).padStart(2,'0'):e.mins+' phút')}
+  const fill=wOk?w:0;
+  const chips=[
+    m.mode===0?chip('Volt','TỰ ĐỘNG'):chip('Warn','THỦ CÔNG'),
+    chip(m.fm===0?'Bad':'Dim','Master '+fl(m.fm)),
+    m.pl?chip('Bad','MẤT PHA'):!m.lora?chip('Bad','LoRa LỖI'):m.hb?chip('Warn','TÉC ĐẦY'):(wOk&&m.w<m.lo)?chip('Warn','TÉC CẠN'):chip('Ok','LoRa OK')
+  ].join('');
+  const on=[m.p1,m.p2,m.ph],up=[m.o1,m.o2,m.oh],rs=[m.r1,m.r2,m.rh],rt=[m.t1,m.t2,m.th],nm=['Moong 1','Moong 2','Trạm Hồ'];
+  const cards=[0,1,2].map(i=>{
+    const run=m.rtv?hm(rt[i]):'--';let c,t,info;
+    if(!up[i]){c='Bad';t='MẤT LORA';info='Mất tín hiệu LoRa · nay '+run}
+    else{c=on[i]?'Ok':'Dim';t=on[i]?'ĐANG CHẠY':'DỪNG';
+      info=(i<2?'Phao '+fl(i===0?m.f1:m.f2):'Tốc độ '+m.sh+'%')+' · '+rs[i]+' dBm · nay '+run}
+    return `<div class="card pc c${c}" style="margin-bottom:8px"><div class="top"><span class="dot" style="--c:var(--${c==='Ok'?'ok':c==='Bad'?'bad':'mu'})"></span><b>${nm[i]}</b>${chip(c,t)}</div><div class="info">${esc(info)}</div></div>`;
+  }).join('');
+  return (stale?`<div class="card msg">${m.online===false||mRx?'MASTER MẤT LIÊN LẠC':'CHỜ DỮ LIỆU MASTER…'}</div>`:'')+
+  `<div class="pump${stale?' stale':''}"><div class="card tank"><div class="sub">Téc nước</div><div class="pct" style="color:${col}">${pct}</div>
+  <div class="bar"><div class="fill" style="height:${fill}%"></div><i class="mk cBad" style="bottom:${lo}%"></i><i class="mk cWarn" style="bottom:${hi}%"></i></div>
+  <div class="sub" style="font-size:12px;min-height:30px">${sub}</div></div>
+  <div class="pcol"><div class="chips">${chips}</div>${cards}</div></div>`;
 }
 function render(){
   const bn=$('#banner');
   if(isPublic()){bn.style.display='block';bn.textContent='⚠️ Đang dùng broker công cộng: dữ liệu ai cũng xem được. Nên chuyển sang broker riêng.'}else bn.style.display='none';
-  $('#main').innerHTML=st?station()+meter('Moong 1',st.m1)+meter('Moong 2',st.m2)+masterCard():'<div class="card sub">Đang chờ dữ liệu từ trạm… Bấm ⚙️ để kiểm tra cài đặt.</div>'+masterCard();
+  $('#tDien').className=tab==='dien'?'on':'';$('#tBom').className=tab==='bom'?'on':'';
+  $('#main').innerHTML=tab==='bom'?pumpPage():(st?station()+meter('Moong 1',st.m1)+meter('Moong 2',st.m2):'<div class="card sub">Đang chờ dữ liệu từ trạm… Bấm ⚙️ để kiểm tra cài đặt.</div>');
 }
 
 function ask(on){
@@ -167,7 +239,8 @@ $('#settings').onclose=function(){
   LS.set('url',cfg.url);LS.set('user',cfg.user);LS.set('pass',cfg.pass);LS.set('base',cfg.base);LS.set('ctl',cfg.ctl?'1':'0');
   connect();
 };
-setInterval(()=>{if(st)render()},15000);
+$('#tDien').onclick=()=>{tab='dien';LS.set('tab',tab);render()};$('#tBom').onclick=()=>{tab='bom';LS.set('tab',tab);render()};
+setInterval(()=>{if(st||master)render()},5000);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 connect();
 </script>

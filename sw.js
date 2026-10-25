@@ -1,4 +1,4 @@
-const CACHE = 'tram-v1';
+const CACHE = 'tram-v2';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   'https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js'];
 self.addEventListener('install', e => {
